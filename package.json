@@ -1,10 +1,10 @@
 {
   "name": "create-saas-app",
-  "version": "0.2.0",
+  "version": "1.1.1",
   "description": "Scaffold a production-ready Multi-Tenant SaaS Turborepo monorepo in seconds",
   "type": "module",
   "bin": {
-    "create-saas-app": "./dist/index.js"
+    "create-saas-app": "dist/index.js"
   },
   "files": [
     "dist",
@@ -48,7 +48,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Vaibhav-Singh2/create-saas-app.git"
+    "url": "git+https://github.com/Vaibhav-Singh2/create-saas-app.git"
   },
   "homepage": "https://github.com/Vaibhav-Singh2/create-saas-app#readme",
   "bugs": {
