@@ -1,4 +1,5 @@
 import path from "node:path";
+import fs from "node:fs";
 import { write, mkdirp, runCommand } from "./utils.js";
 import type { ProjectAnswers } from "./prompts.js";
 import {
@@ -18,6 +19,9 @@ import {
   workerIndexTs,
   dbPackageJson,
   dbIndexTs,
+  drizzleConfigTs,
+  drizzleSchemaTs,
+  prismaSchemaTemplate,
   configPackageJson,
   configIndexTs,
   loggerPackageJson,
@@ -36,6 +40,13 @@ import {
   apiDockerfile,
   workerDockerfile,
   rootReadme,
+  vitestConfigTs,
+  eslintConfigTs,
+  eslintDevDeps,
+  prettierRc,
+  tenantMiddlewareTs,
+  workerEnvExampleTemplate,
+  grafanaDatasourceYaml,
 } from "./templates.js";
 
 // ─── Shared tsconfig.json for every package ───────────────────────────────────
@@ -55,6 +66,12 @@ function pkgTsconfig(): string {
   );
 }
 
+// ─── Directory exists guard ───────────────────────────────────────────────────
+
+export function projectDirectoryExists(name: string): boolean {
+  return fs.existsSync(path.resolve(process.cwd(), name));
+}
+
 // ─── Main orchestrator ────────────────────────────────────────────────────────
 
 export async function generateProject(a: ProjectAnswers): Promise<void> {
@@ -65,8 +82,11 @@ export async function generateProject(a: ProjectAnswers): Promise<void> {
   write(path.join(root, "package.json"), rootPackageJson(a));
   write(path.join(root, "turbo.json"), turboJson());
   write(path.join(root, ".gitignore"), gitignoreTemplate());
-  write(path.join(root, ".npmrc"), npmrcTemplate());
+  const npmrc = npmrcTemplate(a);
+  if (npmrc) write(path.join(root, ".npmrc"), npmrc);
   write(path.join(root, "README.md"), rootReadme(a));
+  write(path.join(root, ".prettierrc"), prettierRc());
+  write(path.join(root, "eslint.config.ts"), eslintConfigTs());
 
   // ── TypeScript config package ───────────────────────────────────────────────
   const tsConfigPkg = path.join(root, "packages", "typescript-config");
@@ -96,6 +116,20 @@ export async function generateProject(a: ProjectAnswers): Promise<void> {
   write(path.join(dbPkg, "package.json"), dbPackageJson(a.database));
   write(path.join(dbPkg, "src", "index.ts"), dbIndexTs(a.database));
   write(path.join(dbPkg, "tsconfig.json"), pkgTsconfig());
+
+  // Drizzle: schema + config
+  if (a.database === "postgres-drizzle" || a.database === "sqlite-drizzle") {
+    write(path.join(dbPkg, "src", "schema.ts"), drizzleSchemaTs(a.database));
+    write(path.join(dbPkg, "drizzle.config.ts"), drizzleConfigTs(a.database));
+  }
+
+  // Prisma: schema.prisma
+  if (a.database === "postgres-prisma") {
+    write(
+      path.join(dbPkg, "prisma", "schema.prisma"),
+      prismaSchemaTemplate(a.projectName),
+    );
+  }
 
   // ── Auth package (optional) ─────────────────────────────────────────────────
   if (a.includeAuth) {
@@ -129,10 +163,15 @@ export async function generateProject(a: ProjectAnswers): Promise<void> {
   write(path.join(apiApp, "tsconfig.json"), appTsconfig());
   write(path.join(apiApp, "tsconfig.build.json"), appTsconfigBuild());
   write(path.join(apiApp, ".env.example"), envExampleTemplate(a));
+  write(path.join(apiApp, "vitest.config.ts"), vitestConfigTs());
   write(path.join(apiApp, "src", "index.ts"), apiIndexTs());
   write(path.join(apiApp, "src", "app.ts"), apiAppTs(a));
   write(path.join(apiApp, "src", "routes", "health.ts"), apiHealthRouteTs());
-  write(path.join(apiApp, "Dockerfile"), apiDockerfile());
+  write(
+    path.join(apiApp, "src", "middleware", "tenant.ts"),
+    tenantMiddlewareTs(),
+  );
+  write(path.join(apiApp, "Dockerfile"), apiDockerfile(a));
 
   if (a.rateLimit !== "none") {
     write(
@@ -147,8 +186,10 @@ export async function generateProject(a: ProjectAnswers): Promise<void> {
     write(path.join(workerApp, "package.json"), workerPackageJson(a));
     write(path.join(workerApp, "tsconfig.json"), appTsconfig());
     write(path.join(workerApp, "tsconfig.build.json"), appTsconfigBuild());
+    write(path.join(workerApp, ".env.example"), workerEnvExampleTemplate(a));
+    write(path.join(workerApp, "vitest.config.ts"), vitestConfigTs());
     write(path.join(workerApp, "src", "index.ts"), workerIndexTs());
-    write(path.join(workerApp, "Dockerfile"), workerDockerfile());
+    write(path.join(workerApp, "Dockerfile"), workerDockerfile(a));
   }
 
   // ── Docker compose ──────────────────────────────────────────────────────────
@@ -156,17 +197,20 @@ export async function generateProject(a: ProjectAnswers): Promise<void> {
   write(path.join(dockerDir, "docker-compose.yml"), dockerComposeTemplate(a));
 
   if (a.includeObservability) {
-    // Minimal prometheus config placeholder
     write(
       path.join(dockerDir, "observability", "prometheus.yml"),
-      `global:
-  scrape_interval: 15s
-
-scrape_configs:
-  - job_name: "api"
-    static_configs:
-      - targets: ["api:3000"]
-`,
+      `global:\n  scrape_interval: 15s\n\nscrape_configs:\n  - job_name: "api"\n    static_configs:\n      - targets: ["api:3000"]\n`,
+    );
+    write(
+      path.join(
+        dockerDir,
+        "observability",
+        "grafana",
+        "provisioning",
+        "datasources",
+        "datasources.yaml",
+      ),
+      grafanaDatasourceYaml(),
     );
   }
 

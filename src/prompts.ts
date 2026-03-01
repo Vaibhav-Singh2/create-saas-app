@@ -78,7 +78,8 @@ export async function runPrompts(
 
       includeWorker: () =>
         p.confirm({
-          message: "Include a background worker app? (BullMQ jobs)",
+          message:
+            "Include a background worker app? (long-running process + BullMQ ready)",
           initialValue: true,
         }),
 

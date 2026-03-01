@@ -32,6 +32,11 @@ export function rootPackageJson(a: ProjectAnswers): string {
       },
       devDependencies: {
         "@types/node": "^22.0.0",
+        "@eslint/js": "^9.0.0",
+        "@typescript-eslint/eslint-plugin": "^8.0.0",
+        "@typescript-eslint/parser": "^8.0.0",
+        eslint: "^9.0.0",
+        globals: "^15.0.0",
         prettier: "^3.4.0",
         turbo: "^2.8.10",
         typescript: "5.7.3",
@@ -81,17 +86,25 @@ export function gitignoreTemplate(): string {
   return `node_modules/
 dist/
 .env
+.env.local
 .turbo/
 coverage/
 *.log
-bun.lock
+*.db
+bun.lockb
+pnpm-lock.yaml
+package-lock.json
+.DS_Store
 `;
 }
 
 // ─── .npmrc ───────────────────────────────────────────────────────────────────
 
-export function npmrcTemplate(): string {
-  return `shamefully-hoist=true\n`;
+export function npmrcTemplate(a: ProjectAnswers): string {
+  if (a.packageManager === "pnpm") {
+    return `shamefully-hoist=true\n`;
+  }
+  return ``;
 }
 
 // ─── .env.example ─────────────────────────────────────────────────────────────
@@ -194,6 +207,17 @@ export function apiPackageJson(a: ProjectAnswers): string {
 export function workerPackageJson(a: ProjectAnswers): string {
   const dbDeps = dbDependencies(a.database);
 
+  const deps: Record<string, string> = {
+    bullmq: "^5.0.0",
+    "@saas/config": "*",
+    "@saas/logger": "*",
+    "@saas/redis": "*",
+    "@saas/types": "*",
+    ...dbDeps,
+  };
+
+  if (a.includeQueue) deps["@saas/queue"] = "*";
+
   return JSON.stringify(
     {
       name: "@saas/worker",
@@ -205,21 +229,15 @@ export function workerPackageJson(a: ProjectAnswers): string {
         build: "tsc --project tsconfig.build.json",
         start: "node dist/index.js",
         "check-types": "tsc --noEmit",
+        lint: "eslint src/",
       },
-      dependencies: {
-        bullmq: "^5.0.0",
-        "@saas/config": "*",
-        "@saas/logger": "*",
-        "@saas/queue": "*",
-        "@saas/redis": "*",
-        "@saas/types": "*",
-        ...dbDeps,
-      },
+      dependencies: deps,
       devDependencies: {
         "@saas/typescript-config": "*",
         "@types/node": "^22.0.0",
         tsx: "^4.19.3",
         typescript: "5.7.3",
+        vitest: "^3.0.7",
       },
     },
     null,
@@ -577,6 +595,7 @@ export function loggerPackageJson(): string {
       devDependencies: {
         "@saas/typescript-config": "*",
         "@types/node": "^22.0.0",
+        "pino-pretty": "^13.0.0",
         typescript: "5.7.3",
       },
     },
@@ -659,22 +678,24 @@ export async function comparePassword(
   return bcrypt.compare(password, hash);
 }
 
-export const authMiddleware: RequestHandler = (req, res, next) => {
-  const header = req.headers["authorization"];
-  if (!header?.startsWith("Bearer ")) {
-    res.status(401).json({ success: false, error: { message: "Unauthorized" } });
-    return;
-  }
-  try {
-    const token = header.slice(7);
-    const payload = verifyToken(token);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (req as any).user = payload;
-    next();
-  } catch {
-    res.status(401).json({ success: false, error: { message: "Invalid token" } });
-  }
-};
+export function authMiddleware(): RequestHandler {
+  return (req, res, next) => {
+    const header = req.headers["authorization"];
+    if (!header?.startsWith("Bearer ")) {
+      res.status(401).json({ success: false, error: { message: "Unauthorized" } });
+      return;
+    }
+    try {
+      const token = header.slice(7);
+      const payload = verifyToken(token);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (req as any).user = payload;
+      next();
+    } catch {
+      res.status(401).json({ success: false, error: { message: "Invalid token" } });
+    }
+  };
+}
 `;
 }
 
@@ -849,7 +870,8 @@ export function typescriptConfigBase(): string {
 
 export function dockerComposeTemplate(a: ProjectAnswers): string {
   const isMongo = a.database === "mongodb-mongoose";
-  const needsRedis = a.includeQueue || a.rateLimit === "redis";
+  const needsRedis =
+    a.includeQueue || a.rateLimit === "redis" || a.includeWorker;
 
   const mongoService = isMongo
     ? `
@@ -905,6 +927,14 @@ export function dockerComposeTemplate(a: ProjectAnswers): string {
 
   const obsServices = a.includeObservability
     ? `
+  loki:
+    image: grafana/loki:latest
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki_data:/loki
+
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
@@ -924,8 +954,10 @@ export function dockerComposeTemplate(a: ProjectAnswers): string {
       GF_SECURITY_ADMIN_PASSWORD: admin
     volumes:
       - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning
     depends_on:
       - prometheus
+      - loki
 `
     : "";
 
@@ -974,7 +1006,9 @@ export function dockerComposeTemplate(a: ProjectAnswers): string {
   const volumes = [
     isMongo ? "  mongo_data:" : "  postgres_data:",
     needsRedis ? "  redis_data:" : "",
-    a.includeObservability ? "  prometheus_data:\n  grafana_data:" : "",
+    a.includeObservability
+      ? "  loki_data:\n  prometheus_data:\n  grafana_data:"
+      : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -988,19 +1022,34 @@ ${volumes}
 
 // ─── Dockerfile templates ─────────────────────────────────────────────────────
 
-export function apiDockerfile(): string {
-  return `FROM node:22-alpine AS base
+export function apiDockerfile(a: ProjectAnswers): string {
+  const installCmd =
+    a.packageManager === "bun"
+      ? "RUN bun install --frozen-lockfile"
+      : a.packageManager === "pnpm"
+        ? "RUN pnpm install --frozen-lockfile"
+        : "RUN npm ci";
+  const buildCmd =
+    a.packageManager === "bun"
+      ? "RUN bun run build --filter=@saas/api"
+      : a.packageManager === "pnpm"
+        ? "RUN pnpm run build --filter=@saas/api"
+        : "RUN npm run build --filter=@saas/api";
+  const baseImage =
+    a.packageManager === "bun" ? "oven/bun:1" : "node:22-alpine";
+
+  return `FROM ${baseImage} AS base
 WORKDIR /app
 
 FROM base AS builder
 COPY package.json turbo.json ./
 COPY apps/api/package.json ./apps/api/
 COPY packages/ ./packages/
-RUN npm install --frozen-lockfile
+${installCmd}
 COPY . .
-RUN npm run build --filter=@saas/api
+${buildCmd}
 
-FROM base AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app/apps/api
 COPY --from=builder /app/apps/api/dist ./dist
 COPY --from=builder /app/apps/api/package.json ./
@@ -1010,19 +1059,34 @@ CMD ["node", "dist/index.js"]
 `;
 }
 
-export function workerDockerfile(): string {
-  return `FROM node:22-alpine AS base
+export function workerDockerfile(a: ProjectAnswers): string {
+  const installCmd =
+    a.packageManager === "bun"
+      ? "RUN bun install --frozen-lockfile"
+      : a.packageManager === "pnpm"
+        ? "RUN pnpm install --frozen-lockfile"
+        : "RUN npm ci";
+  const buildCmd =
+    a.packageManager === "bun"
+      ? "RUN bun run build --filter=@saas/worker"
+      : a.packageManager === "pnpm"
+        ? "RUN pnpm run build --filter=@saas/worker"
+        : "RUN npm run build --filter=@saas/worker";
+  const baseImage =
+    a.packageManager === "bun" ? "oven/bun:1" : "node:22-alpine";
+
+  return `FROM ${baseImage} AS base
 WORKDIR /app
 
 FROM base AS builder
 COPY package.json turbo.json ./
 COPY apps/worker/package.json ./apps/worker/
 COPY packages/ ./packages/
-RUN npm install --frozen-lockfile
+${installCmd}
 COPY . .
-RUN npm run build --filter=@saas/worker
+${buildCmd}
 
-FROM base AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app/apps/worker
 COPY --from=builder /app/apps/worker/dist ./dist
 COPY --from=builder /app/apps/worker/package.json ./
@@ -1100,6 +1164,258 @@ ${isMongo ? "" : "| `" + pm + " run db:generate` | Generate DB migrations |\n| `
 ---
 
 _Generated by \`create-saas-app\`_
+`;
+}
+
+// ─── Drizzle config ───────────────────────────────────────────────────────────
+
+export function drizzleConfigTs(db: DatabaseChoice): string {
+  if (db === "sqlite-drizzle") {
+    return `import { defineConfig } from "drizzle-kit";
+
+export default defineConfig({
+  schema: "./src/schema.ts",
+  out: "./drizzle",
+  dialect: "sqlite",
+  dbCredentials: {
+    url: "./local.db",
+  },
+});
+`;
+  }
+  // postgres-drizzle
+  return `import { defineConfig } from "drizzle-kit";
+
+export default defineConfig({
+  schema: "./src/schema.ts",
+  out: "./drizzle",
+  dialect: "postgresql",
+  dbCredentials: {
+    url: process.env["DATABASE_URL"]!,
+  },
+});
+`;
+}
+
+export function drizzleSchemaTs(db: DatabaseChoice): string {
+  if (db === "sqlite-drizzle") {
+    return `import { text, integer, sqliteTable } from "drizzle-orm/sqlite-core";
+
+export const tenants = sqliteTable("tenants", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  plan: text("plan", { enum: ["free", "pro", "enterprise"] }).notNull().default("free"),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+});
+
+export type Tenant = typeof tenants.$inferSelect;
+export type NewTenant = typeof tenants.$inferInsert;
+`;
+  }
+  // postgres-drizzle
+  return `import { pgTable, text, timestamp, pgEnum } from "drizzle-orm/pg-core";
+
+export const planEnum = pgEnum("plan", ["free", "pro", "enterprise"]);
+
+export const tenants = pgTable("tenants", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  plan: planEnum("plan").notNull().default("free"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type Tenant = typeof tenants.$inferSelect;
+export type NewTenant = typeof tenants.$inferInsert;
+`;
+}
+
+// ─── Prisma schema ────────────────────────────────────────────────────────────
+
+export function prismaSchemaTemplate(projectName: string): string {
+  return `// This is your Prisma schema file.
+// Learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Plan {
+  free
+  pro
+  enterprise
+}
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  plan      Plan     @default(free)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("tenants")
+}
+`;
+}
+
+// ─── Vitest config ────────────────────────────────────────────────────────────
+
+export function vitestConfigTs(): string {
+  return `import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  test: {
+    globals: true,
+    environment: "node",
+    coverage: {
+      reporter: ["text", "lcov"],
+      exclude: ["node_modules/", "dist/"],
+    },
+  },
+});
+`;
+}
+
+// ─── ESLint flat config ───────────────────────────────────────────────────────
+
+export function eslintConfigTs(): string {
+  return `import js from "@eslint/js";
+import tsPlugin from "@typescript-eslint/eslint-plugin";
+import tsParser from "@typescript-eslint/parser";
+import globals from "globals";
+
+/** @type {import("eslint").Linter.FlatConfig[]} */
+export default [
+  js.configs.recommended,
+  {
+    files: ["**/*.ts"],
+    languageOptions: {
+      parser: tsParser,
+      parserOptions: { project: true },
+      globals: { ...globals.node },
+    },
+    plugins: { "@typescript-eslint": tsPlugin },
+    rules: {
+      ...tsPlugin.configs.recommended.rules,
+      "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
+    },
+  },
+  {
+    ignores: ["dist/", "node_modules/", "coverage/"],
+  },
+];
+`;
+}
+
+export function eslintDevDeps(): Record<string, string> {
+  return {
+    "@eslint/js": "^9.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    eslint: "^9.0.0",
+    globals: "^15.0.0",
+  };
+}
+
+// ─── Prettier config ──────────────────────────────────────────────────────────
+
+export function prettierRc(): string {
+  return JSON.stringify(
+    {
+      semi: true,
+      singleQuote: false,
+      tabWidth: 2,
+      trailingComma: "all",
+      printWidth: 100,
+    },
+    null,
+    2,
+  );
+}
+
+// ─── Tenant middleware ────────────────────────────────────────────────────────
+
+export function tenantMiddlewareTs(): string {
+  return `import type { RequestHandler } from "express";
+
+/**
+ * Resolves the tenant from the request.
+ * Extend this to look up the tenant from a DB using slug / subdomain / header.
+ */
+export function tenantMiddleware(): RequestHandler {
+  return async (req, res, next) => {
+    // Option A: resolve from subdomain  (e.g. acme.yoursaas.com → "acme")
+    // const host = req.hostname;
+    // const slug = host.split(".")[0];
+
+    // Option B: resolve from a custom header  X-Tenant-Slug: acme
+    const slug = req.headers["x-tenant-slug"] as string | undefined;
+
+    if (!slug) {
+      res.status(400).json({ success: false, error: { message: "Missing tenant identifier" } });
+      return;
+    }
+
+    // TODO: look up the tenant in your DB and attach it to req
+    // const tenant = await db.query.tenants.findFirst({ where: eq(tenants.slug, slug) });
+    // if (!tenant) { res.status(404).json({ ... }); return; }
+    // (req as any).tenant = tenant;
+
+    // For now, just pass the slug along so you can start building
+    (req as any).tenantSlug = slug;
+    next();
+  };
+}
+`;
+}
+
+// ─── Worker .env.example ─────────────────────────────────────────────────────
+
+export function workerEnvExampleTemplate(a: ProjectAnswers): string {
+  const isMongo = a.database === "mongodb-mongoose";
+  const dbLine = isMongo
+    ? `MONGODB_URI=mongodb://localhost:27017/${a.projectName}`
+    : `DATABASE_URL=postgres://saas:saaspassword@localhost:5432/saas`;
+
+  return `# ─── Application ─────────────────────────────────────────────────────────────
+NODE_ENV=development
+
+# ─── Database ─────────────────────────────────────────────────────────────────
+${dbLine}
+
+# ─── Redis ────────────────────────────────────────────────────────────────────
+REDIS_URL=redis://localhost:6379
+
+# ─── Observability ────────────────────────────────────────────────────────────
+LOG_LEVEL=info
+`;
+}
+
+// ─── Grafana provisioning ─────────────────────────────────────────────────────
+
+export function grafanaDatasourceYaml(): string {
+  return `apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: true
 `;
 }
 
