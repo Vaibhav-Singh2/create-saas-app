@@ -1,0 +1,40 @@
+{
+  "name": "create-saas-app",
+  "version": "0.1.0",
+  "description": "Scaffold a production-ready Multi-Tenant SaaS Turborepo monorepo in seconds",
+  "type": "module",
+  "bin": {
+    "create-saas-app": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.9.1",
+    "picocolors": "^1.1.1",
+    "execa": "^9.5.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.9",
+    "typescript": "^5.7.3"
+  },
+  "keywords": [
+    "saas",
+    "boilerplate",
+    "turborepo",
+    "multi-tenant",
+    "scaffold",
+    "cli"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
