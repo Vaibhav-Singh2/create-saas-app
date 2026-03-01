@@ -117,16 +117,24 @@ export function envExampleTemplate(a: ProjectAnswers): string {
 
   const redisLine =
     a.includeQueue || a.rateLimit === "redis"
-      ? `\n# ─── Redis ──────────────────────────────────────────────────────────────────
-REDIS_URL=redis://localhost:6379`
+      ? `\n# ─── Redis ──────────────────────────────────────────────────────────────────\nREDIS_URL=redis://localhost:6379`
       : "";
 
   const rateLimitSection =
     a.rateLimit !== "none"
-      ? `\n# ─── Rate Limiting ───────────────────────────────────────────────────────────
-RATE_LIMIT_WINDOW_MS=60000
-RATE_LIMIT_MAX_REQUESTS=100`
+      ? `\n# ─── Rate Limiting ───────────────────────────────────────────────────────────\nRATE_LIMIT_WINDOW_MS=60000\nRATE_LIMIT_MAX_REQUESTS=100`
       : "";
+
+  const paymentsSection = a.includePayments
+    ? `\n# ─── Razorpay ────────────────────────────────────────────────────────────────\nRAZORPAY_KEY_ID=rzp_test_xxxxxxxxxxxx\nRAZORPAY_KEY_SECRET=change-me\nRAZORPAY_WEBHOOK_SECRET=change-me`
+    : "";
+
+  const emailSection =
+    a.emailProvider === "resend"
+      ? `\n# ─── Email (Resend) ──────────────────────────────────────────────────────────\nRESEND_API_KEY=re_xxxxxxxxxxxx\nEMAIL_FROM=noreply@yoursaas.com`
+      : a.emailProvider === "nodemailer"
+        ? `\n# ─── Email (SMTP) ────────────────────────────────────────────────────────────\nSMTP_HOST=smtp.example.com\nSMTP_PORT=587\nSMTP_SECURE=false\nSMTP_USER=user@example.com\nSMTP_PASS=change-me\nEMAIL_FROM=noreply@yoursaas.com`
+        : "";
 
   return `# ─── Application ─────────────────────────────────────────────────────────────
 NODE_ENV=development
@@ -143,6 +151,8 @@ JWT_EXPIRES_IN=7d
 # ─── Admin ────────────────────────────────────────────────────────────────────
 ADMIN_SECRET=change-me-admin-secret
 ${rateLimitSection}
+${paymentsSection}
+${emailSection}
 
 # ─── Observability ────────────────────────────────────────────────────────────
 LOG_LEVEL=info
@@ -172,6 +182,8 @@ export function apiPackageJson(a: ProjectAnswers): string {
     deps["@saas/redis"] = "*";
     deps["bullmq"] = "^5.0.0";
   }
+  if (a.includePayments) deps["@saas/payments"] = "*";
+  if (a.emailProvider !== "none") deps["@saas/email"] = "*";
 
   return JSON.stringify(
     {
@@ -1003,6 +1015,23 @@ export function dockerComposeTemplate(a: ProjectAnswers): string {
 `
     : "";
 
+  const webService = a.includeWeb
+    ? `
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: http://api:3000
+    depends_on:
+      - api
+`
+    : "";
+
   const volumes = [
     isMongo ? "  mongo_data:" : "  postgres_data:",
     needsRedis ? "  redis_data:" : "",
@@ -1014,7 +1043,7 @@ export function dockerComposeTemplate(a: ProjectAnswers): string {
     .join("\n");
 
   return `services:
-${mongoService}${redisService}${obsServices}${apiService}${workerService}
+${mongoService}${redisService}${obsServices}${apiService}${workerService}${webService}
 volumes:
 ${volumes}
 `;
@@ -1416,6 +1445,698 @@ datasources:
     access: proxy
     url: http://loki:3100
     editable: true
+`;
+}
+
+// ─── Next.js 15 web app ───────────────────────────────────────────────────────
+
+export function webPackageJson(a: ProjectAnswers): string {
+  const deps: Record<string, string> = {
+    next: "15.2.0",
+    react: "^19.0.0",
+    "react-dom": "^19.0.0",
+    "@saas/config": "*",
+    "@saas/types": "*",
+  };
+  if (a.includeAuth) deps["@saas/auth"] = "*";
+  if (a.emailProvider !== "none") deps["@saas/email"] = "*";
+
+  return JSON.stringify(
+    {
+      name: "@saas/web",
+      version: "0.1.0",
+      private: true,
+      scripts: {
+        dev: "next dev --turbopack",
+        build: "next build",
+        start: "next start",
+        lint: "next lint",
+        "check-types": "tsc --noEmit",
+      },
+      dependencies: deps,
+      devDependencies: {
+        "@saas/typescript-config": "*",
+        "@types/node": "^22.0.0",
+        "@types/react": "^19.0.0",
+        "@types/react-dom": "^19.0.0",
+        typescript: "5.7.3",
+      },
+    },
+    null,
+    2,
+  );
+}
+
+export function webNextConfig(): string {
+  return `import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  output: "standalone",
+  transpilePackages: [
+    "@saas/config",
+    "@saas/types",
+    "@saas/auth",
+    "@saas/email",
+  ],
+};
+
+export default nextConfig;
+`;
+}
+
+export function webTsconfig(): string {
+  return JSON.stringify(
+    {
+      extends: "@saas/typescript-config/base.json",
+      compilerOptions: {
+        target: "ES2017",
+        lib: ["dom", "dom.iterable", "esnext"],
+        allowJs: true,
+        skipLibCheck: true,
+        strict: true,
+        noEmit: true,
+        esModuleInterop: true,
+        module: "esnext",
+        moduleResolution: "bundler",
+        resolveJsonModule: true,
+        isolatedModules: true,
+        jsx: "preserve",
+        incremental: true,
+        plugins: [{ name: "next" }],
+        paths: { "@/*": ["./src/*"] },
+      },
+      include: ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+      exclude: ["node_modules"],
+    },
+    null,
+    2,
+  );
+}
+
+export function webRootLayout(a: ProjectAnswers): string {
+  return `import type { Metadata } from "next";
+import { Inter } from "next/font/google";
+import "./globals.css";
+
+const inter = Inter({ subsets: ["latin"] });
+
+export const metadata: Metadata = {
+  title: "${a.projectName}",
+  description: "Multi-Tenant SaaS Application",
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <body className={inter.className}>{children}</body>
+    </html>
+  );
+}
+`;
+}
+
+export function webGlobalsCss(): string {
+  return `@import "tailwindcss";
+`;
+}
+
+export function webHomePage(a: ProjectAnswers): string {
+  return `export default function HomePage() {
+  return (
+    <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: 680, margin: "80px auto", padding: "0 1rem" }}>
+      <h1 style={{ fontSize: "2.5rem", fontWeight: 700, marginBottom: "0.5rem" }}>
+        Welcome to <span style={{ color: "#0070f3" }}>${a.projectName}</span>
+      </h1>
+      <p style={{ color: "#666", fontSize: "1.125rem", marginBottom: "2rem" }}>
+        Your production-ready Multi-Tenant SaaS platform.
+      </p>
+
+      <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+        <a
+          href="/dashboard"
+          style={{
+            padding: "0.75rem 1.5rem",
+            background: "#0070f3",
+            color: "#fff",
+            borderRadius: 8,
+            textDecoration: "none",
+            fontWeight: 600,
+          }}
+        >
+          Dashboard →
+        </a>
+        <a
+          href="/login"
+          style={{
+            padding: "0.75rem 1.5rem",
+            background: "#f5f5f5",
+            color: "#333",
+            borderRadius: 8,
+            textDecoration: "none",
+            fontWeight: 600,
+          }}
+        >
+          Sign In
+        </a>
+      </div>
+    </main>
+  );
+}
+`;
+}
+
+export function webDashboardPage(): string {
+  return `// Protected — add your auth check here (e.g. read a cookie, call the API)
+export default function DashboardPage() {
+  return (
+    <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: 900, margin: "40px auto", padding: "0 1rem" }}>
+      <h1 style={{ fontSize: "1.75rem", fontWeight: 700 }}>Dashboard</h1>
+      <p style={{ color: "#666" }}>You are signed in. Build your SaaS here.</p>
+
+      <div
+        style={{
+          background: "#f9f9f9",
+          border: "1px solid #eee",
+          borderRadius: 12,
+          padding: "2rem",
+          marginTop: "2rem",
+        }}
+      >
+        <p style={{ margin: 0, color: "#888" }}>
+          📦 Workspace ready — start adding your features.
+        </p>
+      </div>
+    </main>
+  );
+}
+`;
+}
+
+export function webLoginPage(): string {
+  return `"use client";
+import { useState } from "react";
+
+export default function LoginPage() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        \`\${process.env["NEXT_PUBLIC_API_URL"]}/api/v1/auth/login\`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message ?? "Login failed");
+      // TODO: store token (cookie / localStorage) and redirect
+      window.location.href = "/dashboard";
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Login failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main
+      style={{
+        fontFamily: "system-ui, sans-serif",
+        maxWidth: 400,
+        margin: "100px auto",
+        padding: "0 1rem",
+      }}
+    >
+      <h1 style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "1.5rem" }}>
+        Sign in
+      </h1>
+      {error && (
+        <p style={{ color: "#e00", marginBottom: "1rem", fontSize: "0.9rem" }}>
+          {error}
+        </p>
+      )}
+      <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+        <input
+          type="email"
+          placeholder="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+          style={{ padding: "0.75rem", borderRadius: 8, border: "1px solid #ddd", fontSize: "1rem" }}
+        />
+        <input
+          type="password"
+          placeholder="Password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+          style={{ padding: "0.75rem", borderRadius: 8, border: "1px solid #ddd", fontSize: "1rem" }}
+        />
+        <button
+          type="submit"
+          disabled={loading}
+          style={{
+            padding: "0.75rem",
+            background: "#0070f3",
+            color: "#fff",
+            border: "none",
+            borderRadius: 8,
+            fontWeight: 600,
+            fontSize: "1rem",
+            cursor: "pointer",
+            opacity: loading ? 0.7 : 1,
+          }}
+        >
+          {loading ? "Signing in…" : "Sign in"}
+        </button>
+      </form>
+    </main>
+  );
+}
+`;
+}
+
+export function webMiddleware(): string {
+  return `import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+const PUBLIC_PATHS = ["/", "/login", "/api/auth"];
+
+export function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  const isPublic = PUBLIC_PATHS.some(
+    (p) => pathname === p || pathname.startsWith("/api/auth")
+  );
+
+  if (isPublic) return NextResponse.next();
+
+  // Read the JWT stored in an httpOnly cookie after login
+  const token = request.cookies.get("auth-token")?.value;
+
+  if (!token) {
+    const loginUrl = request.nextUrl.clone();
+    loginUrl.pathname = "/login";
+    return NextResponse.redirect(loginUrl);
+  }
+
+  // NOTE: full JWT verification should happen in your API, not here.
+  // Middleware only does a lightweight "token present" check for UX.
+  return NextResponse.next();
+}
+
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+};
+`;
+}
+
+export function webEnvExample(a: ProjectAnswers): string {
+  return `# ─── API connection ───────────────────────────────────────────────────────────
+NEXT_PUBLIC_API_URL=http://localhost:3000
+
+# ─── Auth ─────────────────────────────────────────────────────────────────────
+NEXT_PUBLIC_APP_URL=http://localhost:3001
+${a.includePayments ? `\n# ─── Razorpay ────────────────────────────────────────────────────────────────\nNEXT_PUBLIC_RAZORPAY_KEY_ID=rzp_test_xxxxxxxxxxxx` : ""}
+`;
+}
+
+export function webDockerfile(a: ProjectAnswers): string {
+  const installCmd =
+    a.packageManager === "bun"
+      ? "RUN bun install --frozen-lockfile"
+      : a.packageManager === "pnpm"
+        ? "RUN pnpm install --frozen-lockfile"
+        : "RUN npm ci";
+  const baseImage =
+    a.packageManager === "bun" ? "oven/bun:1" : "node:22-alpine";
+
+  return `FROM ${baseImage} AS base
+WORKDIR /app
+
+FROM base AS builder
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY package.json turbo.json ./
+COPY apps/web/package.json ./apps/web/
+COPY packages/ ./packages/
+${installCmd}
+COPY . .
+RUN npm run build --filter=@saas/web
+
+FROM node:22-alpine AS runner
+WORKDIR /app/apps/web
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY --from=builder /app/apps/web/.next/standalone ./
+COPY --from=builder /app/apps/web/.next/static ./.next/static
+COPY --from=builder /app/apps/web/public ./public
+EXPOSE 3001
+CMD ["node", "server.js"]
+`;
+}
+
+// ─── Razorpay payments package ────────────────────────────────────────────────
+
+export function paymentsPackageJson(): string {
+  return JSON.stringify(
+    {
+      name: "@saas/payments",
+      version: "0.1.0",
+      private: true,
+      type: "module",
+      main: "./src/index.ts",
+      exports: { ".": "./src/index.ts" },
+      scripts: { "check-types": "tsc --noEmit" },
+      dependencies: {
+        razorpay: "^2.9.4",
+        "@saas/config": "*",
+        "@saas/logger": "*",
+      },
+      devDependencies: {
+        "@saas/typescript-config": "*",
+        "@types/node": "^22.0.0",
+        typescript: "5.7.3",
+      },
+    },
+    null,
+    2,
+  );
+}
+
+export function paymentsIndexTs(): string {
+  return `import Razorpay from "razorpay";
+import crypto from "node:crypto";
+import { createLogger } from "@saas/logger";
+
+const logger = createLogger("payments");
+
+let instance: Razorpay | null = null;
+
+export function getRazorpayClient(): Razorpay {
+  if (!instance) {
+    const keyId = process.env["RAZORPAY_KEY_ID"];
+    const keySecret = process.env["RAZORPAY_KEY_SECRET"];
+    if (!keyId || !keySecret) {
+      throw new Error("RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET must be set");
+    }
+    instance = new Razorpay({ key_id: keyId, key_secret: keySecret });
+  }
+  return instance;
+}
+
+export interface CreateOrderOptions {
+  amountInPaise: number; // e.g. 49900 = ₹499.00
+  currency?: string;
+  receipt?: string;
+  notes?: Record<string, string>;
+}
+
+export async function createOrder(opts: CreateOrderOptions) {
+  const rz = getRazorpayClient();
+  const order = await rz.orders.create({
+    amount: opts.amountInPaise,
+    currency: opts.currency ?? "INR",
+    receipt: opts.receipt,
+    notes: opts.notes,
+  });
+  logger.info({ orderId: order.id, amount: opts.amountInPaise }, "Razorpay order created");
+  return order;
+}
+
+/**
+ * Verify Razorpay webhook signature.
+ * @param rawBody   - Raw request body string (before JSON.parse)
+ * @param signature - Value of the X-Razorpay-Signature header
+ */
+export function verifyWebhookSignature(rawBody: string, signature: string): boolean {
+  const secret = process.env["RAZORPAY_WEBHOOK_SECRET"];
+  if (!secret) throw new Error("RAZORPAY_WEBHOOK_SECRET is not set");
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(rawBody)
+    .digest("hex");
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+}
+
+/**
+ * Verify Razorpay payment signature (client-side callback verification).
+ */
+export function verifyPaymentSignature(
+  orderId: string,
+  paymentId: string,
+  signature: string,
+): boolean {
+  const secret = process.env["RAZORPAY_KEY_SECRET"];
+  if (!secret) throw new Error("RAZORPAY_KEY_SECRET is not set");
+  const body = \`\${orderId}|\${paymentId}\`;
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(body)
+    .digest("hex");
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+}
+`;
+}
+
+export function paymentsRouteTs(): string {
+  return `import { Router } from "express";
+import { createOrder, verifyWebhookSignature, verifyPaymentSignature } from "@saas/payments";
+import { createLogger } from "@saas/logger";
+import type { RequestHandler } from "express";
+
+const logger = createLogger("payments-route");
+
+export function paymentsRouter(): Router {
+  const router = Router();
+
+  // POST /payments/order — create a Razorpay order
+  router.post("/order", (async (req, res) => {
+    const { amountInPaise, currency, receipt, notes } = req.body as {
+      amountInPaise: number;
+      currency?: string;
+      receipt?: string;
+      notes?: Record<string, string>;
+    };
+
+    if (!amountInPaise || amountInPaise < 100) {
+      res.status(400).json({ success: false, error: { message: "Invalid amount" } });
+      return;
+    }
+
+    try {
+      const order = await createOrder({ amountInPaise, currency, receipt, notes });
+      res.json({ success: true, data: order });
+    } catch (err) {
+      logger.error({ err }, "Failed to create Razorpay order");
+      res.status(500).json({ success: false, error: { message: "Failed to create order" } });
+    }
+  }) as RequestHandler);
+
+  // POST /payments/verify — verify payment after client callback
+  router.post("/verify", ((req, res) => {
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
+      req.body as {
+        razorpay_order_id: string;
+        razorpay_payment_id: string;
+        razorpay_signature: string;
+      };
+
+    const valid = verifyPaymentSignature(
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+    );
+
+    if (!valid) {
+      res.status(400).json({ success: false, error: { message: "Invalid payment signature" } });
+      return;
+    }
+
+    // TODO: update subscription/plan in your DB here
+    logger.info({ orderId: razorpay_order_id, paymentId: razorpay_payment_id }, "Payment verified");
+    res.json({ success: true, data: { paymentId: razorpay_payment_id } });
+  }) as RequestHandler);
+
+  // POST /payments/webhook — Razorpay server-to-server events
+  router.post("/webhook", ((req, res) => {
+    const signature = req.headers["x-razorpay-signature"] as string | undefined;
+    if (!signature) {
+      res.status(400).json({ success: false, error: { message: "Missing signature" } });
+      return;
+    }
+
+    // express.raw() middleware must be applied to this route for rawBody access
+    const rawBody =
+      typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+
+    try {
+      const valid = verifyWebhookSignature(rawBody, signature);
+      if (!valid) {
+        res.status(400).json({ success: false, error: { message: "Invalid webhook signature" } });
+        return;
+      }
+    } catch (err) {
+      logger.error({ err }, "Webhook verification error");
+      res.status(500).json({ success: false, error: { message: "Webhook error" } });
+      return;
+    }
+
+    const event = req.body as { event: string; payload: unknown };
+    logger.info({ event: event.event }, "Razorpay webhook received");
+
+    // Handle events
+    switch (event.event) {
+      case "payment.captured":
+        // TODO: activate subscription
+        break;
+      case "payment.failed":
+        // TODO: notify user
+        break;
+      case "subscription.charged":
+        // TODO: update subscription period
+        break;
+    }
+
+    res.json({ success: true });
+  }) as RequestHandler);
+
+  return router;
+}
+`;
+}
+
+// ─── Email package ────────────────────────────────────────────────────────────
+
+export function emailPackageJson(provider: "resend" | "nodemailer"): string {
+  const deps: Record<string, string> = { "@saas/config": "*" };
+  const devDeps: Record<string, string> = {
+    "@saas/typescript-config": "*",
+    "@types/node": "^22.0.0",
+    typescript: "5.7.3",
+  };
+
+  if (provider === "resend") {
+    deps["resend"] = "^4.0.0";
+  } else {
+    deps["nodemailer"] = "^6.9.0";
+    devDeps["@types/nodemailer"] = "^6.4.0";
+  }
+
+  return JSON.stringify(
+    {
+      name: "@saas/email",
+      version: "0.1.0",
+      private: true,
+      type: "module",
+      main: "./src/index.ts",
+      exports: { ".": "./src/index.ts" },
+      scripts: { "check-types": "tsc --noEmit" },
+      dependencies: deps,
+      devDependencies: devDeps,
+    },
+    null,
+    2,
+  );
+}
+
+export function emailIndexTs(provider: "resend" | "nodemailer"): string {
+  if (provider === "resend") {
+    return `import { Resend } from "resend";
+
+let client: Resend | null = null;
+
+function getClient(): Resend {
+  if (!client) {
+    const apiKey = process.env["RESEND_API_KEY"];
+    if (!apiKey) throw new Error("RESEND_API_KEY is not set");
+    client = new Resend(apiKey);
+  }
+  return client;
+}
+
+export interface SendEmailOptions {
+  to: string | string[];
+  subject: string;
+  html: string;
+  from?: string;
+}
+
+export async function sendEmail(opts: SendEmailOptions): Promise<void> {
+  const from = opts.from ?? process.env["EMAIL_FROM"] ?? "noreply@yoursaas.com";
+  const { error } = await getClient().emails.send({
+    from,
+    to: opts.to,
+    subject: opts.subject,
+    html: opts.html,
+  });
+  if (error) throw new Error(\`Failed to send email: \${error.message}\`);
+}
+
+// ─── Template helpers ──────────────────────────────────────────────────────────
+
+export function welcomeEmail(name: string): string {
+  return \`<h1>Welcome, \${name}!</h1><p>Thanks for signing up. Let's get started.</p>\`;
+}
+
+export function passwordResetEmail(resetUrl: string): string {
+  return \`<h1>Reset your password</h1><p><a href="\${resetUrl}">Click here</a> to reset your password. This link expires in 1 hour.</p>\`;
+}
+`;
+  }
+
+  // nodemailer
+  return `import nodemailer from "nodemailer";
+
+let transporter: nodemailer.Transporter | null = null;
+
+function getTransporter(): nodemailer.Transporter {
+  if (!transporter) {
+    transporter = nodemailer.createTransport({
+      host: process.env["SMTP_HOST"] ?? "localhost",
+      port: parseInt(process.env["SMTP_PORT"] ?? "587"),
+      secure: process.env["SMTP_SECURE"] === "true",
+      auth:
+        process.env["SMTP_USER"] && process.env["SMTP_PASS"]
+          ? { user: process.env["SMTP_USER"], pass: process.env["SMTP_PASS"] }
+          : undefined,
+    });
+  }
+  return transporter;
+}
+
+export interface SendEmailOptions {
+  to: string | string[];
+  subject: string;
+  html: string;
+  from?: string;
+}
+
+export async function sendEmail(opts: SendEmailOptions): Promise<void> {
+  const from = opts.from ?? process.env["EMAIL_FROM"] ?? "noreply@yoursaas.com";
+  await getTransporter().sendMail({ from, to: opts.to, subject: opts.subject, html: opts.html });
+}
+
+// ─── Template helpers ──────────────────────────────────────────────────────────
+
+export function welcomeEmail(name: string): string {
+  return \`<h1>Welcome, \${name}!</h1><p>Thanks for signing up. Let's get started.</p>\`;
+}
+
+export function passwordResetEmail(resetUrl: string): string {
+  return \`<h1>Reset your password</h1><p><a href="\${resetUrl}">Click here</a> to reset your password. This link expires in 1 hour.</p>\`;
+}
 `;
 }
 

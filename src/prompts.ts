@@ -10,14 +10,19 @@ export type RateLimitChoice = "none" | "memory" | "redis";
 
 export type PackageManager = "bun" | "pnpm" | "npm";
 
+export type EmailProvider = "none" | "resend" | "nodemailer";
+
 export interface ProjectAnswers {
   projectName: string;
   packageManager: PackageManager;
   database: DatabaseChoice;
+  includeWeb: boolean;
   includeWorker: boolean;
   includeObservability: boolean;
   includeAuth: boolean;
   includeQueue: boolean;
+  includePayments: boolean;
+  emailProvider: EmailProvider;
   rateLimit: RateLimitChoice;
   gitInit: boolean;
 }
@@ -76,6 +81,12 @@ export async function runPrompts(
           ],
         }),
 
+      includeWeb: () =>
+        p.confirm({
+          message: "Include a Next.js 15 web app? (apps/web/)",
+          initialValue: true,
+        }),
+
       includeWorker: () =>
         p.confirm({
           message:
@@ -100,6 +111,30 @@ export async function runPrompts(
         p.confirm({
           message: "Include queue package? (BullMQ + Redis)",
           initialValue: true,
+        }),
+
+      includePayments: () =>
+        p.confirm({
+          message: "Include payments package? (Razorpay — orders + webhooks)",
+          initialValue: false,
+        }),
+
+      emailProvider: () =>
+        p.select<EmailProvider>({
+          message: "Email provider?",
+          options: [
+            { value: "none", label: "None", hint: "skip email" },
+            {
+              value: "resend",
+              label: "Resend",
+              hint: "modern API-first email",
+            },
+            {
+              value: "nodemailer",
+              label: "Nodemailer",
+              hint: "SMTP / self-hosted",
+            },
+          ],
         }),
 
       rateLimit: () =>

@@ -42,11 +42,29 @@ import {
   rootReadme,
   vitestConfigTs,
   eslintConfigTs,
-  eslintDevDeps,
   prettierRc,
   tenantMiddlewareTs,
   workerEnvExampleTemplate,
   grafanaDatasourceYaml,
+  // Next.js web app
+  webPackageJson,
+  webNextConfig,
+  webTsconfig,
+  webRootLayout,
+  webGlobalsCss,
+  webHomePage,
+  webDashboardPage,
+  webLoginPage,
+  webMiddleware,
+  webEnvExample,
+  webDockerfile,
+  // Payments
+  paymentsPackageJson,
+  paymentsIndexTs,
+  paymentsRouteTs,
+  // Email
+  emailPackageJson,
+  emailIndexTs,
 } from "./templates.js";
 
 // ─── Shared tsconfig.json for every package ───────────────────────────────────
@@ -117,13 +135,11 @@ export async function generateProject(a: ProjectAnswers): Promise<void> {
   write(path.join(dbPkg, "src", "index.ts"), dbIndexTs(a.database));
   write(path.join(dbPkg, "tsconfig.json"), pkgTsconfig());
 
-  // Drizzle: schema + config
   if (a.database === "postgres-drizzle" || a.database === "sqlite-drizzle") {
     write(path.join(dbPkg, "src", "schema.ts"), drizzleSchemaTs(a.database));
     write(path.join(dbPkg, "drizzle.config.ts"), drizzleConfigTs(a.database));
   }
 
-  // Prisma: schema.prisma
   if (a.database === "postgres-prisma") {
     write(
       path.join(dbPkg, "prisma", "schema.prisma"),
@@ -139,7 +155,7 @@ export async function generateProject(a: ProjectAnswers): Promise<void> {
     write(path.join(authPkg, "tsconfig.json"), pkgTsconfig());
   }
 
-  // ── Redis package (optional) ────────────────────────────────────────────────
+  // ── Redis package ───────────────────────────────────────────────────────────
   const needsRedis =
     a.includeQueue || a.rateLimit === "redis" || a.includeWorker;
   if (needsRedis) {
@@ -155,6 +171,28 @@ export async function generateProject(a: ProjectAnswers): Promise<void> {
     write(path.join(queuePkg, "package.json"), queuePackageJson());
     write(path.join(queuePkg, "src", "index.ts"), queueIndexTs());
     write(path.join(queuePkg, "tsconfig.json"), pkgTsconfig());
+  }
+
+  // ── Payments package (optional) ─────────────────────────────────────────────
+  if (a.includePayments) {
+    const paymentsPkg = path.join(root, "packages", "payments");
+    write(path.join(paymentsPkg, "package.json"), paymentsPackageJson());
+    write(path.join(paymentsPkg, "src", "index.ts"), paymentsIndexTs());
+    write(path.join(paymentsPkg, "tsconfig.json"), pkgTsconfig());
+  }
+
+  // ── Email package (optional) ────────────────────────────────────────────────
+  if (a.emailProvider !== "none") {
+    const emailPkg = path.join(root, "packages", "email");
+    write(
+      path.join(emailPkg, "package.json"),
+      emailPackageJson(a.emailProvider),
+    );
+    write(
+      path.join(emailPkg, "src", "index.ts"),
+      emailIndexTs(a.emailProvider),
+    );
+    write(path.join(emailPkg, "tsconfig.json"), pkgTsconfig());
   }
 
   // ── API app ─────────────────────────────────────────────────────────────────
@@ -180,6 +218,10 @@ export async function generateProject(a: ProjectAnswers): Promise<void> {
     );
   }
 
+  if (a.includePayments) {
+    write(path.join(apiApp, "src", "routes", "payments.ts"), paymentsRouteTs());
+  }
+
   // ── Worker app (optional) ───────────────────────────────────────────────────
   if (a.includeWorker) {
     const workerApp = path.join(root, "apps", "worker");
@@ -190,6 +232,30 @@ export async function generateProject(a: ProjectAnswers): Promise<void> {
     write(path.join(workerApp, "vitest.config.ts"), vitestConfigTs());
     write(path.join(workerApp, "src", "index.ts"), workerIndexTs());
     write(path.join(workerApp, "Dockerfile"), workerDockerfile(a));
+  }
+
+  // ── Next.js web app (optional) ──────────────────────────────────────────────
+  if (a.includeWeb) {
+    const webApp = path.join(root, "apps", "web");
+    write(path.join(webApp, "package.json"), webPackageJson(a));
+    write(path.join(webApp, "next.config.ts"), webNextConfig());
+    write(path.join(webApp, "tsconfig.json"), webTsconfig());
+    write(path.join(webApp, ".env.example"), webEnvExample(a));
+    write(path.join(webApp, "Dockerfile"), webDockerfile(a));
+    // App Router pages
+    write(path.join(webApp, "src", "app", "layout.tsx"), webRootLayout(a));
+    write(path.join(webApp, "src", "app", "globals.css"), webGlobalsCss());
+    write(path.join(webApp, "src", "app", "page.tsx"), webHomePage(a));
+    write(
+      path.join(webApp, "src", "app", "dashboard", "page.tsx"),
+      webDashboardPage(),
+    );
+    write(
+      path.join(webApp, "src", "app", "(auth)", "login", "page.tsx"),
+      webLoginPage(),
+    );
+    // Next.js middleware (auth guard)
+    write(path.join(webApp, "src", "middleware.ts"), webMiddleware());
   }
 
   // ── Docker compose ──────────────────────────────────────────────────────────
