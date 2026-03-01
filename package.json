@@ -1,5 +1,5 @@
 {
-  "name": "create-saas-app",
+  "name": "create-saas-app-cli",
   "version": "1.1.1",
   "description": "Scaffold a production-ready Multi-Tenant SaaS Turborepo monorepo in seconds",
   "type": "module",
@@ -56,5 +56,8 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

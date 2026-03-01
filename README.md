@@ -3,9 +3,9 @@
 > Scaffold a production-ready **Multi-Tenant SaaS** Turborepo monorepo in seconds.
 
 ```bash
-npx create-saas-app my-project
+npx create-saas-app-cli my-project
 # or
-npx create-saas-app         # prompts for project name
+npx create-saas-app-cli         # prompts for project name
 ```
 
 ---
