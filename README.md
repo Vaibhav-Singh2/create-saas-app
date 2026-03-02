@@ -22,6 +22,7 @@ An opinionated but flexible Turborepo monorepo with:
 | **Queue**           | BullMQ + Redis                                                                     |
 | **Rate Limiting**   | None · In-memory · Redis-backed                                                    |
 | **Observability**   | Prometheus + Grafana (Docker Compose)                                              |
+| **CI/CD**           | Optional GitHub Actions workflow (`.github/workflows/ci.yml`)                      |
 | **Package Manager** | bun · pnpm · npm                                                                   |
 
 ---
@@ -36,6 +37,7 @@ An opinionated but flexible Turborepo monorepo with:
 ◆  Which database / ORM?
 │  ● PostgreSQL + Drizzle ORM  ○ PostgreSQL + Prisma
 │  ○ MongoDB + Mongoose  ○ SQLite + Drizzle ORM
+◆  Include CI/CD workflow?  yes
 ◆  Include a background worker app?  yes
 ◆  Include observability stack?  no
 ◆  Include auth package?  yes

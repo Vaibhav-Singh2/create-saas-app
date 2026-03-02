@@ -878,6 +878,67 @@ export function typescriptConfigBase(): string {
   );
 }
 
+// ─── GitHub Actions CI ───────────────────────────────────────────────────────
+
+export function githubActionsCiWorkflow(a: ProjectAnswers): string {
+  const isBun = a.packageManager === "bun";
+  const isPnpm = a.packageManager === "pnpm";
+
+  const setupRuntime = isBun
+    ? `      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.8`
+    : `      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: ${isPnpm ? "pnpm" : "npm"}`;
+
+  const corepackStep = isPnpm
+    ? `      - name: Enable Corepack
+        run: corepack enable
+`
+    : "";
+
+  const installCmd = isBun
+    ? "bun install --frozen-lockfile"
+    : isPnpm
+      ? "pnpm install --frozen-lockfile"
+      : "npm ci";
+
+  const runCmd = isBun ? "bun run" : `${a.packageManager} run`;
+
+  return `name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+${setupRuntime}
+${corepackStep}      - name: Install dependencies
+        run: ${installCmd}
+      - name: Type check
+        run: ${runCmd} check-types
+      - name: Lint
+        run: ${runCmd} lint
+      - name: Test
+        run: ${runCmd} test
+      - name: Build
+        run: ${runCmd} build
+`;
+}
+
 // ─── Docker compose ───────────────────────────────────────────────────────────
 
 export function dockerComposeTemplate(a: ProjectAnswers): string {

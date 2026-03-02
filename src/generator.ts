@@ -58,6 +58,7 @@ import {
   webMiddleware,
   webEnvExample,
   webDockerfile,
+  githubActionsCiWorkflow,
   // Payments
   paymentsPackageJson,
   paymentsIndexTs,
@@ -105,6 +106,12 @@ export async function generateProject(a: ProjectAnswers): Promise<void> {
   write(path.join(root, "README.md"), rootReadme(a));
   write(path.join(root, ".prettierrc"), prettierRc());
   write(path.join(root, "eslint.config.ts"), eslintConfigTs());
+  if (a.includeCI) {
+    write(
+      path.join(root, ".github", "workflows", "ci.yml"),
+      githubActionsCiWorkflow(a),
+    );
+  }
 
   // ── TypeScript config package ───────────────────────────────────────────────
   const tsConfigPkg = path.join(root, "packages", "typescript-config");

@@ -11,6 +11,7 @@ function baseAnswers(overrides: Partial<ProjectAnswers> = {}): ProjectAnswers {
     projectName: "test-app",
     packageManager: "npm",
     database: "postgres-drizzle",
+    includeCI: false,
     includeWeb: false,
     includeWorker: false,
     includeObservability: false,
@@ -274,5 +275,22 @@ describe("generateProject", () => {
       undefined,
     );
     expect(exists()).toBe(true);
+  });
+
+  test("21. includeCI=true: creates GitHub Actions workflow", async () => {
+    await generateProject(baseAnswers({ includeCI: true }));
+    expect(exists(".github", "workflows", "ci.yml")).toBe(true);
+    const workflow = fs.readFileSync(
+      path.join(tmpDir, "test-app", ".github", "workflows", "ci.yml"),
+      "utf-8",
+    );
+    expect(workflow).toContain("name: CI");
+    expect(workflow).toContain("actions/checkout@v4");
+    expect(workflow).toContain("npm ci");
+  });
+
+  test("22. includeCI=false: does not create workflow", async () => {
+    await generateProject(baseAnswers({ includeCI: false }));
+    expect(exists(".github", "workflows", "ci.yml")).toBe(false);
   });
 });

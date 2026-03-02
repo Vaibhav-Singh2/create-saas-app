@@ -16,6 +16,7 @@ export interface ProjectAnswers {
   projectName: string;
   packageManager: PackageManager;
   database: DatabaseChoice;
+  includeCI: boolean;
   includeWeb: boolean;
   includeWorker: boolean;
   includeObservability: boolean;
@@ -79,6 +80,12 @@ export async function runPrompts(
               hint: "zero-infra",
             },
           ],
+        }),
+
+      includeCI: () =>
+        p.confirm({
+          message: "Include CI/CD workflow? (.github/workflows/ci.yml)",
+          initialValue: true,
         }),
 
       includeWeb: () =>

@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { runPrompts } from "./prompts.js";
+import type { ProjectAnswers } from "./prompts.js";
 import { generateProject, projectDirectoryExists } from "./generator.js";
 import { execa } from "execa";
 
@@ -19,6 +20,65 @@ const VERSION = pkgJson.version;
 // ─── CLI flags ────────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
+
+function buildNextSteps(answers: ProjectAnswers, didInstall: boolean): string {
+  const pm = answers.packageManager;
+  const devCmd = pm === "bun" ? "bun dev" : `${pm} run dev`;
+  const dbMigrateCmd = `${pm} run db:migrate`;
+
+  const lines: string[] = [
+    `${pc.green("✔")} Done! Next steps:`,
+    "",
+    `  ${pc.cyan(`cd ${answers.projectName}`)}`,
+  ];
+
+  if (!didInstall) {
+    lines.push(`  ${pc.cyan(`${pm} install`)}`);
+  }
+
+  lines.push(
+    `  ${pc.dim("# Start infrastructure")}`,
+    `  ${pc.cyan("docker compose -f docker/docker-compose.yml up -d")}`,
+    `  ${pc.dim("# Copy env files")}`,
+    `  ${pc.cyan("cp apps/api/.env.example apps/api/.env")}`,
+  );
+
+  if (answers.includeWorker) {
+    lines.push(`  ${pc.cyan("cp apps/worker/.env.example apps/worker/.env")}`);
+  }
+
+  if (answers.includeWeb) {
+    lines.push(`  ${pc.cyan("cp apps/web/.env.example apps/web/.env.local")}`);
+  }
+
+  lines.push(
+    `  ${pc.dim("# Windows (PowerShell) copy alternative")}`,
+    `  ${pc.cyan('Copy-Item "apps/api/.env.example" "apps/api/.env"')}`,
+  );
+
+  if (answers.includeWorker) {
+    lines.push(
+      `  ${pc.cyan('Copy-Item "apps/worker/.env.example" "apps/worker/.env"')}`,
+    );
+  }
+
+  if (answers.includeWeb) {
+    lines.push(
+      `  ${pc.cyan('Copy-Item "apps/web/.env.example" "apps/web/.env.local"')}`,
+    );
+  }
+
+  if (answers.database !== "mongodb-mongoose") {
+    lines.push(
+      `  ${pc.dim("# Run database migrations")}`,
+      `  ${pc.cyan(dbMigrateCmd)}`,
+    );
+  }
+
+  lines.push(`  ${pc.dim("# Start dev")}`, `  ${pc.cyan(devCmd)}`, "");
+
+  return lines.join("\n");
+}
 
 if (args.includes("--version") || args.includes("-v")) {
   console.log(`create-saas-app v${VERSION}`);
@@ -92,8 +152,9 @@ async function main() {
     message: `Run ${pc.cyan(`${pm} install`)} now?`,
     initialValue: true,
   });
+  const didInstall = !p.isCancel(runInstall) && runInstall;
 
-  if (!p.isCancel(runInstall) && runInstall) {
+  if (didInstall) {
     const installSpinner = p.spinner();
     installSpinner.start(`Installing dependencies with ${pm}...`);
     try {
@@ -109,13 +170,7 @@ async function main() {
     }
   }
 
-  const devCmd = pm === "bun" ? "bun dev" : `${pm} run dev`;
-  const cdCmd = `cd ${answers.projectName}`;
-  const installCmd = `${pm} install`;
-
-  p.outro(
-    `${pc.green("✔")} Done! Next steps:\n\n  ${pc.cyan(cdCmd)}\n${runInstall ? "" : `  ${pc.cyan(installCmd)}\n`}  ${pc.dim("# Start infrastructure")}\n  ${pc.cyan("docker compose -f docker/docker-compose.yml up -d")}\n  ${pc.dim("# Copy env vars")}\n  ${pc.cyan("cp apps/api/.env.example apps/api/.env")}\n  ${pc.dim("# Start dev")}\n  ${pc.cyan(devCmd)}\n`,
-  );
+  p.outro(buildNextSteps(answers, didInstall));
 }
 
 main().catch(console.error);
